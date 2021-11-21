@@ -1,30 +1,174 @@
 ---
 title: "Greece COVID-19 Border Testing"
-author: "Aidan"
+author: "Aidan Cooper"
 date: "06/11/2021"
 output: html_document
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(here)
+library(ggtext)
+library(mgcv)
+
+theme_set(theme_classic())
+# Set1: "#E41A1C" "#377EB8" "#4DAF4A" "#984EA3" "#FF7F00"
 ```
 
-## R Markdown
+## Background and Data
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+Research paper: [Efficient and targeted COVID-19 border testing via reinforcement learning](https://www.nature.com/articles/s41586-021-04014-z_reference.pdf)
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+Data sources:
 
-```{r cars}
-summary(cars)
+ * [Greece border testing](https://github.com/kimondr/EVA_Public_Data)
+ * [Our World in Data - COVID-19](https://github.com/owid/covid-19-data/tree/master/public/data)
+
+Group across all the entry points.
+
+```{r greece_data, message=FALSE}
+df_greece <- read_csv(here("data", "greece_eva.csv")) %>%
+  separate(epoch_dates, sep = "/", into = c("epoch_start", "epoch_end")) %>%
+  select(-c(epoch, epoch_end, point_entry)) %>%
+  mutate(epoch_start = as.Date(epoch_start)) %>%
+  group_by(epoch_start, country) %>%
+  summarise(across(everything(), list(sum)))
+df_greece
+```
+The number of tests conducted on each day of the week is consistent across all days, but the number of arrivals is considerably higher on Thu-Sun. This means that the rate of testing is higher for Thu-Sun than for Mon-Wed.
+
+```{r}
+df_tests <- df_greece %>%
+  ungroup() %>%
+  select(-country, entry_point) %>%
+  group_by(epoch_start) %>%
+  summarise(across(everything(), list(sum))) %>%
+  mutate(
+    tests_per_1000arrival = numTestsPerformed_1_1 / numSchedArrivals_1_1 * 1000,
+    positives_per_1000test = numPositivesFound_1_1 / numTestsPerformed_1_1 * 1000,
+    n_arrivals = numSchedArrivals_1_1,
+    n_tests = numTestsPerformed_1_1,
+    weekday = lubridate::wday(epoch_start, week_start = 1) < 4
+  ) %>%
+  select(c("epoch_start", "n_arrivals", "n_tests", "tests_per_1000arrival", "positives_per_1000test", "weekday")) %>%
+  arrange(epoch_start)
+mod1 <- gam(tests_per_1000arrival ~ s(as.numeric(epoch_start), bs = "cs"), data = df_tests)
+df_tests <- df_tests %>%
+  mutate(
+    gam = mod1$fitted.values,
+    gam_percent_diff = (tests_per_1000arrival - gam) / tests_per_1000arrival * 100
+  )
+df_dow <- df_tests %>%
+  ungroup() %>%
+  mutate(day_of_week = lubridate::wday(epoch_start, label = TRUE, week_start = 1)) %>% 
+  select(c("day_of_week", "gam_percent_diff", "n_arrivals", "n_tests")) %>%
+  group_by(day_of_week) %>%
+  summarise(
+    mean_diff = mean(gam_percent_diff),
+    total_arrivals = sum(n_arrivals),
+    total_tests = sum(n_tests)
+    )
+df_dow
+```
+Plot the _tests per 1,000 arrivals_ throughout the study period.
+
+```{r}
+f <- ggplot(df_tests, aes(x = epoch_start, y = tests_per_1000arrival)) +
+  geom_line() +
+  geom_point(
+    mapping = aes(colour = weekday)
+  ) +
+  geom_line(aes(y = gam), colour = "grey", linetype = "dashed", size = 1) +
+  labs(
+    title = "COVID-19 testing per 1,000 arrivals",
+    subtitle = paste(
+      "Testing increased significantly over time, with higher testing rates on ",
+      "**<span style='color:#377EB8;'>Mon-Wed</span>** than ",
+      "**<span style='color:#E41A1C;'>Thu-Sun</span>**"
+    ),
+    x = "",
+    y = "Tests performed per 1,000 arrivals",
+    caption = "© Aidan Cooper 2021 | www.aidancooper.co.uk"
+  ) +
+  guides(colour = "none") +
+  theme(
+    plot.title = element_text(face = "bold", size = 18),
+    plot.subtitle = element_markdown(),
+    plot.caption = element_text(hjust = 0, size = 8,  colour = "#222222"),
+    axis.title.y = element_text(vjust = 2, size = 12),
+    panel.grid.major = element_line(),
+    panel.grid.minor = element_line()
+  ) +
+  scale_color_brewer(palette = "Set1") +
+  scale_x_date(date_breaks = "1 month", limits = as.Date(c("2020-08-01", "2020-11-01")))
+width <- 8
+height <- width * 9 / 16
+ggsave("../figures/testing_over_time.png", width = width, height = height)
+f
 ```
 
-## Including Plots
+Filter for countries with at least 100,000 arrivals in Greece during the study period.
 
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
+```{r}
+df_agg <- df_greece %>%
+  ungroup() %>%
+  select(-epoch_start) %>%
+  group_by(country) %>%
+  summarise(across(everything(), list(sum))) %>%
+  filter(numSchedArrivals_1_1 > 100000) %>%
+  mutate(
+    tests_per_1000arrival = numTestsPerformed_1_1 / numSchedArrivals_1_1 * 1000,
+    positives_per_1000test = numPositivesFound_1_1 / numTestsPerformed_1_1 * 1000,
+    n_arrivals = numSchedArrivals_1_1
+  ) %>%
+  select(c("country", "n_arrivals", "tests_per_1000arrival", "positives_per_1000test")) %>%
+  arrange(desc(n_arrivals))
+df_agg
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+Germany, Britain, and France have the most arrivals in Greece.
+
+```{r}
+ggplot(df_agg) +
+  geom_col(
+    mapping = aes(x = n_arrivals, y = reorder(country, n_arrivals), fill = "red")
+  ) +
+  labs(
+    title = "Number of arrivals by country",
+    subtitle = "Countries ranked by number of arrivals in Greece during period from 2020-08-06 to 2020-10-31",
+    x = "Number of arrivals",
+    y = "Country",
+  ) +
+  guides(fill = "none")
+```
+
+Are _tests per capita_ and _positives per test_ correlated across the countries?
+
+```{r}
+ggplot(df_agg) +
+  geom_point(
+    mapping = aes(x = tests_per_1000arrival, y = positives_per_1000test)
+  )
+```
+
+Our World in Data COVID-19 dataset.
+
+```{r covid_data, message=FALSE}
+df_covid <- read_csv(here("data", "owid-covid-data.csv")) %>%
+  select(c(
+    iso_code,
+    location,
+    date,
+    total_cases_per_million,
+    new_cases_smoothed_per_million,
+    total_deaths_per_million,
+    new_deaths_smoothed_per_million,
+    weekly_icu_admissions_per_million,
+    weekly_hosp_admissions_per_million,
+    new_tests_smoothed_per_thousand,
+    positive_rate,
+    tests_per_case,
+    total_vaccinations_per_hundred
+  ))
+```
