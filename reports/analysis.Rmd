@@ -25,30 +25,59 @@ Data sources:
  * [Greece border testing](https://github.com/kimondr/EVA_Public_Data)
  * [Our World in Data - COVID-19](https://github.com/owid/covid-19-data/tree/master/public/data)
 
-Group across all the entry points.
+
+Load data set and also create a filtered version containing only countries with at least 100,000 arrivals.
 
 ```{r greece_data, message=FALSE}
-df_greece <- read_csv(here("data", "greece_eva.csv")) %>%
+df <- read_csv(here("data", "greece_eva.csv")) %>%
   separate(epoch_dates, sep = "/", into = c("epoch_start", "epoch_end")) %>%
-  select(-c(epoch, epoch_end, point_entry)) %>%
-  mutate(epoch_start = as.Date(epoch_start)) %>%
-  group_by(epoch_start, country) %>%
-  summarise(across(everything(), list(sum)))
-df_greece
+  select(-c(epoch, epoch_end)) %>%
+  mutate(epoch_start = as.Date(epoch_start))
+
+# identify countries with at least 100,000 arrivals in Greece
+countries <- df %>% 
+  select(c(country, numSchedArrivals)) %>% 
+  group_by(country) %>% 
+  summarise(n_arrivals = sum(numSchedArrivals)) %>% 
+  filter(n_arrivals > 100000) %>% 
+  pull(country)
+df_100k <- df %>% filter(country %in% countries)
+paste(c(length(countries), "countries have at least 100,000 arrivals in Greece:", countries), collapse=" ")
+
+df
 ```
+
+Entry points
+
+```{r}
+df_entry <- df %>%
+  select(-c(country, epoch_start)) %>%
+  group_by(point_entry) %>%
+  summarise(across(everything(), list(sum))) %>%
+  mutate(
+    tests_per_1000arrival = numTestsPerformed_1 / numSchedArrivals_1 * 1000,
+    positives_per_1000test = numPositivesFound_1 / numTestsPerformed_1 * 1000,
+    n_arrivals = numSchedArrivals_1,
+    n_tests = numTestsPerformed_1,
+  ) %>%
+  select(c("point_entry", "n_arrivals", "n_tests", "tests_per_1000arrival", "positives_per_1000test")) %>%
+  arrange(desc(n_arrivals))
+df_entry
+```
+
+
 The number of tests conducted on each day of the week is consistent across all days, but the number of arrivals is considerably higher on Thu-Sun. This means that the rate of testing is higher for Thu-Sun than for Mon-Wed.
 
 ```{r}
-df_tests <- df_greece %>%
-  ungroup() %>%
-  select(-country, entry_point) %>%
+df_tests <- df %>%
+  select(-c(country, point_entry)) %>%
   group_by(epoch_start) %>%
   summarise(across(everything(), list(sum))) %>%
   mutate(
-    tests_per_1000arrival = numTestsPerformed_1_1 / numSchedArrivals_1_1 * 1000,
-    positives_per_1000test = numPositivesFound_1_1 / numTestsPerformed_1_1 * 1000,
-    n_arrivals = numSchedArrivals_1_1,
-    n_tests = numTestsPerformed_1_1,
+    tests_per_1000arrival = numTestsPerformed_1 / numSchedArrivals_1 * 1000,
+    positives_per_1000test = numPositivesFound_1 / numTestsPerformed_1 * 1000,
+    n_arrivals = numSchedArrivals_1,
+    n_tests = numTestsPerformed_1,
     weekday = lubridate::wday(epoch_start, week_start = 1) < 4
   ) %>%
   select(c("epoch_start", "n_arrivals", "n_tests", "tests_per_1000arrival", "positives_per_1000test", "weekday")) %>%
@@ -108,49 +137,6 @@ ggsave("../figures/testing_over_time.png", width = width, height = height)
 f
 ```
 
-Filter for countries with at least 100,000 arrivals in Greece during the study period.
-
-```{r}
-df_agg <- df_greece %>%
-  ungroup() %>%
-  select(-epoch_start) %>%
-  group_by(country) %>%
-  summarise(across(everything(), list(sum))) %>%
-  filter(numSchedArrivals_1_1 > 100000) %>%
-  mutate(
-    tests_per_1000arrival = numTestsPerformed_1_1 / numSchedArrivals_1_1 * 1000,
-    positives_per_1000test = numPositivesFound_1_1 / numTestsPerformed_1_1 * 1000,
-    n_arrivals = numSchedArrivals_1_1
-  ) %>%
-  select(c("country", "n_arrivals", "tests_per_1000arrival", "positives_per_1000test")) %>%
-  arrange(desc(n_arrivals))
-df_agg
-```
-
-Germany, Britain, and France have the most arrivals in Greece.
-
-```{r}
-ggplot(df_agg) +
-  geom_col(
-    mapping = aes(x = n_arrivals, y = reorder(country, n_arrivals), fill = "red")
-  ) +
-  labs(
-    title = "Number of arrivals by country",
-    subtitle = "Countries ranked by number of arrivals in Greece during period from 2020-08-06 to 2020-10-31",
-    x = "Number of arrivals",
-    y = "Country",
-  ) +
-  guides(fill = "none")
-```
-
-Are _tests per capita_ and _positives per test_ correlated across the countries?
-
-```{r}
-ggplot(df_agg) +
-  geom_point(
-    mapping = aes(x = tests_per_1000arrival, y = positives_per_1000test)
-  )
-```
 
 Our World in Data COVID-19 dataset.
 
