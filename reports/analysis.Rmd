@@ -8,6 +8,7 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
+library(magrittr)
 library(here)
 library(ggtext)
 library(mgcv)
@@ -26,14 +27,28 @@ Data sources:
  * [Our World in Data - COVID-19](https://github.com/owid/covid-19-data/tree/master/public/data)
 
 
-Load data set and also create a filtered version containing only countries with at least 100,000 arrivals.
+Load data set.
 
 ```{r greece_data, message=FALSE}
 df <- read_csv(here("data", "greece_eva.csv")) %>%
   separate(epoch_dates, sep = "/", into = c("epoch_start", "epoch_end")) %>%
   select(-c(epoch, epoch_end)) %>%
   mutate(epoch_start = as.Date(epoch_start))
+slice_sample(df, n=10)
+```
 
+There are 38 entry points, numbered from 1-41, with numbers 7, 32, and 35 not observed in the data.
+
+```{r}
+point_entry_nums <- str_split(unique(df$point_entry), pattern="_") %>% sapply(extract, 2) %>% as.numeric() %>% sort()
+paste(c(length(point_entry_nums), "entry points:", point_entry_nums), collapse=" ")
+df <- df %>% 
+  mutate(point_entry = fct_relevel(point_entry, paste0("Entry_", point_entry_nums)))
+```
+
+Create a filtered version containing only countries with at least 100,000 arrivals.
+
+```{r}
 # identify countries with at least 100,000 arrivals in Greece
 countries <- df %>% 
   select(c(country, numSchedArrivals)) %>% 
@@ -43,8 +58,41 @@ countries <- df %>%
   pull(country)
 df_100k <- df %>% filter(country %in% countries)
 paste(c(length(countries), "countries have at least 100,000 arrivals in Greece:", countries), collapse=" ")
+```
 
-df
+Heatmap.
+
+```{r}
+df_heatmap <- df_100k %>%
+  select(country, point_entry, numSchedArrivals) %>%
+  group_by(country, point_entry) %>% 
+  summarise(n_arrivals = sum(numSchedArrivals)) %>% 
+  group_by(country) %>% mutate(n_arrivals = n_arrivals / sum(n_arrivals) * 100) %>% 
+  mutate(point_entry = str_split(point_entry, pattern="_") %>% sapply(extract, 2) %>% as.numeric())
+f <- df_heatmap %>% ggplot(aes(x=country, y=point_entry, fill=n_arrivals)) + 
+  geom_tile() +
+  labs(
+    title = "Distribution of entry points for each country",
+    subtitle = paste(
+      "The percentage of arrivals at each entry point varies considerably depending on the country"
+    ),
+    x = "Origin country",
+    y = "Entry point number",
+    fill = "% arrivals",
+    caption = "© Aidan Cooper 2021 | www.aidancooper.co.uk"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", size = 18),
+    plot.subtitle = element_markdown(),
+    plot.caption = element_text(hjust = 0, size = 8,  colour = "#222222"),
+    axis.title.y = element_text(vjust = 2, size = 12),
+    panel.grid.major = element_line(),
+    panel.grid.minor = element_line()
+  )
+width <- 8
+height <- width * 9 / 16
+ggsave("../figures/entry_points_heatmap.png", width = width, height = height)
+f
 ```
 
 Entry points
