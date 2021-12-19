@@ -2,7 +2,9 @@
 title: "Greece COVID-19 Border Testing"
 author: "Aidan Cooper"
 date: "06/11/2021"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
